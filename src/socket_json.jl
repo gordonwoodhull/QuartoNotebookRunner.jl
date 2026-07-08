@@ -134,3 +134,19 @@ Extract markdown content from options.
 """
 _get_markdown(options::Dict)::Union{Nothing,String} =
     _get_nested(options, "target", "markdown", "value")
+
+"""
+    _get_handled_languages(options)
+
+Languages owned by OTHER Quarto engines in a multi-engine render. QNR cedes
+cells in these languages — it leaves their fences verbatim in the markdown
+instead of executing them — so the owning engine (e.g. knitr for `r`) can run
+them later in the pipeline. Quarto sends this as the top-level `handledLanguages`
+key on the execute options; it is absent/empty in single-engine and Quarto 1
+renders, in which case QNR owns every julia/python/r cell as before.
+"""
+function _get_handled_languages(options)::Vector{String}
+    langs = options isa AbstractDict ? get(options, "handledLanguages", nothing) : nothing
+    langs === nothing && return String[]
+    return String[String(l) for l in langs]
+end

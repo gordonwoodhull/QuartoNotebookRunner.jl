@@ -137,9 +137,10 @@ end
 Return a vector of raw markdown and code chunks from `file` ready for evaluation
 by `evaluate_raw_cells!`.
 """
-raw_text_chunks(file::File, ::Nothing; source_ranges = nothing) = raw_text_chunks(file.path)
-raw_text_chunks(file::File, markdown::String; source_ranges = nothing) =
-    raw_markdown_chunks_from_string(file.path, markdown; source_ranges)
+raw_text_chunks(file::File, ::Nothing; source_ranges = nothing, handled_languages = String[]) =
+    raw_text_chunks(file.path)
+raw_text_chunks(file::File, markdown::String; source_ranges = nothing, handled_languages = String[]) =
+    raw_markdown_chunks_from_string(file.path, markdown; source_ranges, handled_languages)
 
 function raw_text_chunks(path::String)
     endswith(path, ".qmd") && return raw_markdown_chunks(path)
@@ -163,9 +164,13 @@ function raw_markdown_chunks_from_string(
     path::String,
     markdown::String;
     source_ranges = nothing,
+    handled_languages = String[],
 )
     raw_chunks = []
     source_code_hash = hash(VERSION)
+    # Ceding a language changes which cells are code, so it must invalidate the
+    # results cache alongside the source itself.
+    source_code_hash = hash(handled_languages, source_code_hash)
     pars = Parser()
     ast = pars(markdown; source = path)
     file_fromtmatter = CommonMark.frontmatter(ast)
@@ -178,6 +183,14 @@ function raw_markdown_chunks_from_string(
     code_cells = false
     for (node, enter) in ast
         language = enter ? toplevel_language(node) : nothing
+        # Multi-engine cooperation (Quarto 2): when another engine owns this
+        # language, cede the cell — leave its fence verbatim in the surrounding
+        # markdown so the owning engine can execute it later in the pipeline.
+        # `handled_languages` is empty in the single-engine / Quarto 1 case,
+        # preserving the historical behavior of owning every julia/python/r cell.
+        if language !== nothing && String(language) in handled_languages
+            language = nothing
+        end
         if language !== nothing
             code_cells = true
             line = node.sourcepos[1][1]

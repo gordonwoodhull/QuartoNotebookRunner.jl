@@ -81,8 +81,9 @@ function evaluate!(
     options = _parsed_options(options)
     path = abspath(f.path)
     if isfile(path)
+        handled_languages = _get_handled_languages(options)
         source_code_hash, raw_chunks, file_frontmatter =
-            raw_text_chunks(f, markdown; source_ranges)
+            raw_text_chunks(f, markdown; source_ranges, handled_languages)
         merged_options = _extract_relevant_options(file_frontmatter, options)
 
         # A change of metadata, including parameter values, must invalidate the source code hash.
