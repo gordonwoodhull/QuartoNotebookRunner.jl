@@ -1,6 +1,6 @@
 # Notebook output caching.
 
-const SCHEMA_VERSION = v"1.0.0"
+const SCHEMA_VERSION = v"1.1.0"
 const MAX_CACHE_ENTRIES_PER_NOTEBOOK = 3
 
 """

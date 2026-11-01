@@ -150,3 +150,14 @@ function _get_handled_languages(options)::Vector{String}
     langs === nothing && return String[]
     return String[String(l) for l in langs]
 end
+
+"""
+    _get_emit_units(options)
+
+Whether to annotate cells with `metadata.quarto` (the top-level `emitUnits` key on the
+execute options). Absent or false keeps the notebook byte-identical to before.
+"""
+function _get_emit_units(options)::Bool
+    flag = options isa AbstractDict ? get(options, "emitUnits", false) : false
+    return flag === true
+end

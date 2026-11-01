@@ -137,10 +137,27 @@ end
 Return a vector of raw markdown and code chunks from `file` ready for evaluation
 by `evaluate_raw_cells!`.
 """
-raw_text_chunks(file::File, ::Nothing; source_ranges = nothing, handled_languages = String[]) =
-    raw_text_chunks(file.path)
-raw_text_chunks(file::File, markdown::String; source_ranges = nothing, handled_languages = String[]) =
-    raw_markdown_chunks_from_string(file.path, markdown; source_ranges, handled_languages)
+function raw_text_chunks(
+    file::File,
+    ::Nothing;
+    source_ranges = nothing,
+    handled_languages = String[],
+)
+    # `source_ranges` and `handled_languages` apply to markdown documents only.
+    endswith(file.path, ".qmd") || return raw_text_chunks(file.path)
+    return raw_markdown_chunks_from_string(
+        file.path,
+        read(file.path, String);
+        source_ranges,
+        handled_languages,
+    )
+end
+raw_text_chunks(
+    file::File,
+    markdown::String;
+    source_ranges = nothing,
+    handled_languages = String[],
+) = raw_markdown_chunks_from_string(file.path, markdown; source_ranges, handled_languages)
 
 function raw_text_chunks(path::String)
     endswith(path, ".qmd") && return raw_markdown_chunks(path)

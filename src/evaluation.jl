@@ -82,8 +82,12 @@ function evaluate!(
     path = abspath(f.path)
     if isfile(path)
         handled_languages = _get_handled_languages(options)
+        emit_units = _get_emit_units(options)
         source_code_hash, raw_chunks, file_frontmatter =
             raw_text_chunks(f, markdown; source_ranges, handled_languages)
+        # The annotations are part of the cells, so a run with `emitUnits` must not
+        # reuse cells cached from a run without it, or the reverse.
+        emit_units && (source_code_hash = hash(:emit_units, source_code_hash))
         merged_options = _extract_relevant_options(file_frontmatter, options)
 
         # A change of metadata, including parameter values, must invalidate the source code hash.
@@ -139,6 +143,8 @@ function evaluate!(
                 merged_options;
                 showprogress,
                 chunk_callback,
+                handled_languages,
+                emit_units,
             )
             # Update the hash to the latest computed.
             f.source_code_hash = source_code_hash
@@ -187,6 +193,8 @@ function evaluate_raw_cells!(
     options::Dict;
     showprogress = true,
     chunk_callback = (i, n, c) -> nothing,
+    handled_languages::Vector{String} = String[],
+    emit_units::Bool = false,
 )
     evaluate_params!(f, options["params"])
 
@@ -206,16 +214,19 @@ function evaluate_raw_cells!(
 
     chunks_to_evaluate = sum(c -> should_eval(c, global_eval), chunks)
     ith_chunk_to_evaluate = 1
+    unit = 0
 
     @maybe_progress showprogress "$header" for (nth, chunk) in enumerate(chunks)
         if chunk.type === :code
+            unit += 1
+            quarto = emit_units ? _unit_annotation(chunk, unit) : nothing
             if !should_eval(chunk, global_eval)
                 push!(
                     cells,
                     (;
                         id = string(nth),
                         cell_type = chunk.type,
-                        metadata = (;),
+                        metadata = _cell_metadata(quarto),
                         source = process_cell_source(chunk.source),
                         outputs = [],
                         execution_count = 0,
@@ -231,10 +242,19 @@ function evaluate_raw_cells!(
                     nth,
                     allow_error_global,
                     record_error!,
+                    quarto,
                 )
             end
         elseif chunk.type === :markdown
-            _evaluate_markdown_cell!(cells, f, chunk, nth, record_error!)
+            _evaluate_markdown_cell!(
+                cells,
+                f,
+                chunk,
+                nth,
+                record_error!;
+                handled_languages,
+                emit_units,
+            )
         else
             throw(ArgumentError("unknown chunk type: $(chunk.type)"))
         end
@@ -245,6 +265,26 @@ function evaluate_raw_cells!(
 
     return cells
 end
+
+# The `emitUnits` annotations: `metadata.quarto` on every cell that comes from a unit
+# of the source, so a consumer can align the notebook with the document.
+
+"""
+    _unit_annotation(chunk, unit)
+
+The `metadata.quarto` payload for a code chunk. `unit` is the 1-based index among the
+code chunks QNR runs, in document order, counting `eval: false` chunks.
+"""
+_unit_annotation(chunk, unit) =
+    (; unit, language = string(chunk.language), file = chunk.file, line = chunk.line)
+
+"""
+    _cell_metadata(quarto; extra...)
+
+Cell metadata: empty without an annotation, so the default output is unchanged.
+"""
+_cell_metadata(::Nothing; extra...) = (;)
+_cell_metadata(quarto; extra...) = (; quarto = merge(quarto, NamedTuple(extra)))
 
 function evaluate_params!(f, params::Dict{String})
     invalid_param_keys = filter(!Base.isidentifier, keys(params))
@@ -280,6 +320,7 @@ function _add_language_prefix_cell!(
     expand_cell,
     language::Symbol,
     fenced::Bool = false,
+    quarto = nothing,
 )
     lang_str = fenced ? "{{$(language)}}" : string(language)
     code = chomp(strip_cell_options(chunk.source))
@@ -288,7 +329,11 @@ function _add_language_prefix_cell!(
         (;
             id = string(expand_cell ? string(nth, "_", mth) : string(nth), "_code_prefix"),
             cell_type = :markdown,
-            metadata = (;),
+            metadata = _cell_metadata(
+                quarto === nothing ? nothing : (; unit = quarto.unit);
+                role = "code_prefix",
+                (expand_cell ? (; expansion = mth) : (;))...,
+            ),
             source = process_cell_source("```$(lang_str)\n$(code)\n```\n", Dict()),
         ),
     )
@@ -314,7 +359,15 @@ end
 
 Evaluate a single code cell: send to worker, handle expansion, format outputs.
 """
-function _evaluate_code_cell!(cells, f, chunk, nth, allow_error_global, record_error!)
+function _evaluate_code_cell!(
+    cells,
+    f,
+    chunk,
+    nth,
+    allow_error_global,
+    record_error!,
+    quarto = nothing,
+)
     Logging.@debug "Evaluating cell" file = chunk.file line = chunk.line
     source = transform_source(chunk)
 
@@ -342,7 +395,7 @@ function _evaluate_code_cell!(cells, f, chunk, nth, allow_error_global, record_e
             (;
                 id = string(nth),
                 cell_type = chunk.type,
-                metadata = (;),
+                metadata = _cell_metadata(quarto; role = "expansion_source"),
                 source = process_cell_source(chunk.source),
                 outputs = [],
                 execution_count = 1,
@@ -369,6 +422,7 @@ function _evaluate_code_cell!(cells, f, chunk, nth, allow_error_global, record_e
                     expand_cell,
                     chunk.language,
                     user_echo == "fenced",
+                    quarto,
                 )
             end
             cell_options["echo"] = false
@@ -381,7 +435,8 @@ function _evaluate_code_cell!(cells, f, chunk, nth, allow_error_global, record_e
             (;
                 id = expand_cell ? string(nth, "_", mth) : string(nth),
                 cell_type = chunk.type,
-                metadata = (;),
+                metadata = expand_cell ? _cell_metadata(quarto; expansion = mth) :
+                           _cell_metadata(quarto),
                 source = process_cell_source(source, cell_options),
                 outputs,
                 execution_count = 1,
@@ -480,18 +535,33 @@ end
 # Markdown cell evaluation: inline code expansion.
 
 """
-    _evaluate_markdown_cell!(cells, f, chunk, nth, record_error!)
+    _evaluate_markdown_cell!(cells, f, chunk, nth, record_error!; handled_languages, emit_units)
 
-Evaluate inline code in a markdown cell and push the result.
+Evaluate inline code in a markdown cell and push the result. A span in a language in
+`handled_languages` belongs to another engine and stays literal. With `emit_units` the
+cell's `metadata.quarto.inline` records each evaluated span and its raw outputs.
 """
-function _evaluate_markdown_cell!(cells, f, chunk, nth, record_error!)
+function _evaluate_markdown_cell!(
+    cells,
+    f,
+    chunk,
+    nth,
+    record_error!;
+    handled_languages::Vector{String} = String[],
+    emit_units::Bool = false,
+)
     marker = r"{(?:julia|python|r)} "
     source = chunk.source
+    inline = NamedTuple[]
+    # Spans are located left to right so repeated identical spans get their own line.
+    search_from = 1
     if contains(chunk.source, INLINE_CODE_PATTERN)
         parser = Parser()
         for (node, enter) in parser(chunk.source)
             if enter && node.t isa CommonMark.Code
                 if startswith(node.literal, marker)
+                    language = match(r"^{(julia|python|r)} ", node.literal).captures[1]
+                    language in handled_languages && continue
                     source_code = replace(node.literal, marker => "")
                     if startswith(node.literal, "{r}")
                         source_code = wrap_with_r_boilerplate(source_code)
@@ -516,6 +586,9 @@ function _evaluate_markdown_cell!(cells, f, chunk, nth, record_error!)
                     render_response.is_expansion &&
                         error("inline code cells cannot be expanded")
                     remote = only(render_response.cells)
+                    # Both this and the substitution below consume the result buffers, so
+                    # the outputs are built from a copy.
+                    outputs = emit_units ? _inline_outputs(remote) : []
                     if !isnothing(remote.error)
                         # file location is not straightforward to determine with inline literals, but just printing the (presumably short)
                         # code back instead of a location should be quite helpful
@@ -529,6 +602,19 @@ function _evaluate_markdown_cell!(cells, f, chunk, nth, record_error!)
                         source =
                             replace(source, "`$(node.literal)`" => "$processed"; count = 1)
                     end
+                    if emit_units
+                        newlines, search_from =
+                            _locate_span(chunk.source, "`$(node.literal)`", search_from)
+                        push!(
+                            inline,
+                            (;
+                                language,
+                                code = replace(node.literal, marker => ""),
+                                line = chunk.line + newlines,
+                                outputs,
+                            ),
+                        )
+                    end
                 end
             end
         end
@@ -538,8 +624,54 @@ function _evaluate_markdown_cell!(cells, f, chunk, nth, record_error!)
         (;
             id = string(nth),
             cell_type = chunk.type,
-            metadata = (;),
+            metadata = isempty(inline) ? (;) : (; quarto = (; inline)),
             source = process_cell_source(source),
         ),
     )
+end
+
+"""
+    _locate_span(text, needle, from)
+
+The number of newlines in `text` before the first `needle` at or after index `from`,
+and the index to continue searching from for the next span.
+"""
+function _locate_span(text, needle, from)
+    found = findnext(needle, text, from)
+    found === nothing && return 0, from
+    newlines = count(==('\n'), SubString(text, 1, prevind(text, first(found))))
+    return newlines, nextind(text, last(found))
+end
+
+"""
+    _inline_outputs(remote)
+
+The raw nbformat outputs of one inline span: an `execute_result`, or an `error`.
+"""
+function _inline_outputs(remote)
+    results = Dict{String,WorkerIPC.MimeResult}(
+        mime => WorkerIPC.MimeResult(r.mime, r.error, copy(r.data)) for
+        (mime, r) in remote.results
+    )
+    if !isnothing(remote.error)
+        processed = process_results(results)
+        return [
+            (;
+                output_type = "error",
+                ename = remote.error,
+                evalue = get(processed.data, "text/plain", ""),
+                traceback = remote.backtrace,
+            ),
+        ]
+    end
+    processed = process_results(results)
+    isempty(processed.data) && return []
+    return [
+        (;
+            output_type = "execute_result",
+            execution_count = 1,
+            processed.data,
+            processed.metadata,
+        ),
+    ]
 end
