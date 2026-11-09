@@ -130,9 +130,7 @@ Logging.min_enabled_level(l::KindLogger) = Logging.min_enabled_level(l.inner)
 Logging.shouldlog(l::KindLogger, args...) = Logging.shouldlog(l.inner, args...)
 Logging.catch_exceptions(l::KindLogger) = Logging.catch_exceptions(l.inner)
 function Logging.handle_message(l::KindLogger, level, args...; kws...)
-    kind =
-        level >= Logging.Error ? "error" :
-        level >= Logging.Warn ? "warning" : "message"
+    kind = level >= Logging.Error ? "error" : level >= Logging.Warn ? "warning" : "message"
     lock(l.inline_display.lock) do
         l.inline_display.kind[] = kind
     end
@@ -170,7 +168,8 @@ function _capture(
     redirect_stdout(context_stdout)
     redirect_stderr(context_stderr)
     console_logger = Logging.ConsoleLogger(context_stderr)
-    logger = inline_display.trace ? KindLogger(console_logger, inline_display) : console_logger
+    logger =
+        inline_display.trace ? KindLogger(console_logger, inline_display) : console_logger
 
     # A new task seeds its rng from the current task, which moves the stream the
     # cell's own code draws from, so put the seed back afterwards.

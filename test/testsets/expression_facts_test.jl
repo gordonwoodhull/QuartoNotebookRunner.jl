@@ -39,7 +39,8 @@
         @test code.metadata == (;)
         # Stream runs are not split when the caller did not ask for units: the
         # warning, the info and the second `println` merge as before.
-        streams = [(o.name, join(o.text)) for o in code.outputs if o.output_type == "stream"]
+        streams =
+            [(o.name, join(o.text)) for o in code.outputs if o.output_type == "stream"]
         @test [s[1] for s in streams] == ["stdout", "stderr", "stdout"]
     end
 end
@@ -95,8 +96,7 @@ end
     end
 end
 
-@testitem "expression starts are relative to the code after the options" tags =
-    [:notebook] begin
+@testitem "expression starts are relative to the code after the options" tags = [:notebook] begin
     import QuartoNotebookRunner as QNR
 
     mktempdir() do dir
@@ -148,8 +148,7 @@ end
     end
 end
 
-@testitem "output from a subprocess and a late async print is attributed" tags =
-    [:notebook] begin
+@testitem "output from a subprocess and a late async print is attributed" tags = [:notebook] begin
     import QuartoNotebookRunner as QNR
 
     mktempdir() do dir
@@ -186,7 +185,10 @@ end
         )
         @test sub !== nothing
         @test q.output_expressions[sub] == 1
-        late = findfirst(o -> o.output_type == "stream" && occursin("late", join(o.text)), cell.outputs)
+        late = findfirst(
+            o -> o.output_type == "stream" && occursin("late", join(o.text)),
+            cell.outputs,
+        )
         @test late !== nothing
         # The async print lands during `sleep(1)`, expression 3.
         @test q.output_expressions[late] == 3
@@ -266,11 +268,15 @@ end
             only(filter(c -> string(c.cell_type) == "code", json.cells))
         end
         off = run(Dict{String,Any}())
-        stderr_off = [o for o in off.outputs if o.output_type == "stream" && o.name == "stderr"]
+        stderr_off =
+            [o for o in off.outputs if o.output_type == "stream" && o.name == "stderr"]
         @test isempty(stderr_off)
 
         on = run(Dict{String,Any}("emitUnits" => true))
-        text = join(join(o.text) for o in on.outputs if o.output_type == "stream" && o.name == "stderr")
+        text = join(
+            join(o.text) for
+            o in on.outputs if o.output_type == "stream" && o.name == "stderr"
+        )
         @test occursin("careful", text)
         @test occursin("fyi", text)
         @test occursin("raw", text)

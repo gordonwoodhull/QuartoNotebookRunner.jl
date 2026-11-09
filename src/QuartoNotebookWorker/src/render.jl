@@ -53,9 +53,10 @@ function _render_thunk(
     inline::Bool,
     trace::Bool = false,
 )
-    captured, display_results, display_expressions = NotebookState.with_cell_options(cell_options) do
-        with_inline_display(thunk, cell_options; trace)
-    end
+    captured, display_results, display_expressions =
+        NotebookState.with_cell_options(cell_options) do
+            with_inline_display(thunk, cell_options; trace)
+        end
 
     # Attempt to expand the cell. This requires the cell result to have a method
     # defined for the `QuartoNotebookWorker.expand` function. We only attempt to

@@ -408,7 +408,9 @@ function _evaluate_code_cell!(
         allow_error_cell = get(remote.cell_options, "error", allow_error_global)
         outputs, out_expressions, out_kinds =
             _format_worker_outputs(remote, allow_error_cell, record_error!, chunk)
-        trace = quarto === nothing ? nothing : _trace_metadata(remote, chunk, out_expressions, out_kinds)
+        trace =
+            quarto === nothing ? nothing :
+            _trace_metadata(remote, chunk, out_expressions, out_kinds)
 
         cell_options = expand_cell ? remote.cell_options : Dict()
 
@@ -438,8 +440,12 @@ function _evaluate_code_cell!(
             (;
                 id = expand_cell ? string(nth, "_", mth) : string(nth),
                 cell_type = chunk.type,
-                metadata = expand_cell ? _cell_metadata(quarto; expansion = mth, (trace === nothing ? (;) : trace)...) :
-                           _cell_metadata(quarto; (trace === nothing ? (;) : trace)...),
+                metadata = expand_cell ?
+                           _cell_metadata(
+                    quarto;
+                    expansion = mth,
+                    (trace === nothing ? (;) : trace)...,
+                ) : _cell_metadata(quarto; (trace === nothing ? (;) : trace)...),
                 source = process_cell_source(source, cell_options),
                 outputs,
                 execution_count = 1,
@@ -529,7 +535,11 @@ end
 # Lines of code after the leading `#|` options and blank lines, as the worker counts them.
 function _code_line_count(source::AbstractString)
     lines = collect(eachline(IOBuffer(source)))
-    dropped = something(findfirst(l -> !(startswith(l, "#|") || isempty(strip(l))), lines), length(lines) + 1) - 1
+    dropped =
+        something(
+            findfirst(l -> !(startswith(l, "#|") || isempty(strip(l))), lines),
+            length(lines) + 1,
+        ) - 1
     return length(lines) - dropped
 end
 

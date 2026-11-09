@@ -200,8 +200,7 @@ end
         @test cell.display_expressions == [6]
         # Without a trace, the same cell gives the old three runs.
         plain = QNW.render(code, "test.jl", 1, Dict{String,Any}(); mod)
-        @test [(n, e, k) for (n, _, _, e, k) in plain.cells[1].streams] ==
-              [("stdout", 0, ""), ("stderr", 0, ""), ("stdout", 0, ""), ("stdout", 0, "")]
+        @test [(n, e, k) for (n, _, _, e, k) in plain.cells[1].streams] == [("stdout", 0, ""), ("stderr", 0, ""), ("stdout", 0, ""), ("stdout", 0, "")]
     end
 end
 

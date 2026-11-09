@@ -67,13 +67,17 @@ end
     @test result.cell_options == req.cell_options
     @test result.inline == true
     @test result.trace == true
-    @test IPC._ipc_deserialize(IPC._ipc_serialize(IPC.RenderRequest(
-        code = "1",
-        file = "f",
-        notebook = "n",
-        line = 1,
-        cell_options = Dict{String,Any}(),
-    ))).trace == false
+    @test IPC._ipc_deserialize(
+        IPC._ipc_serialize(
+            IPC.RenderRequest(
+                code = "1",
+                file = "f",
+                notebook = "n",
+                line = 1,
+                cell_options = Dict{String,Any}(),
+            ),
+        ),
+    ).trace == false
     @test result.inline == req.inline
 end
 
