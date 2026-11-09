@@ -178,7 +178,7 @@ end
         mod = QNW.NotebookState.notebook_module()
 
         response = QNW.render("]status", "test.jl", 1; mod)
-        output = join(text for (_, text, _) in response.cells[1].streams)
+        output = join(text for (_, text, _, _, _) in response.cells[1].streams)
         @test contains(output, "Status") || contains(output, "Project")
     end
 end
@@ -212,7 +212,7 @@ end
         print(x)
         """
         response = QNW.render(code, "test.jl", 1; mod)
-        @test response.cells[1].streams == [("stdout", "M(22)", 0)]
+        @test response.cells[1].streams == [("stdout", "M(22)", 0, 0, "")]
     end
 end
 

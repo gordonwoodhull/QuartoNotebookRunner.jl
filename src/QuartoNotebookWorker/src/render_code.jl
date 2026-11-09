@@ -87,10 +87,13 @@ function include_str(
     inline_display::InlineDisplay,
 )
     loc = LineNumberNode(line, Symbol(file))
+    starts = Int[]
     try
         ast = _process_code(mod, code; filename = file, lineno = line)
         @assert Meta.isexpr(ast, :toplevel)
-        return io_capture(;
+        # Lines are counted from the first line of code, after the `#|` options.
+        first_line = line + last(_drop_cell_options(code))
+        captured = io_capture(;
             cell_options = cell_options,
             inline_display,
             rethrow = InterruptException,
@@ -106,6 +109,8 @@ function include_str(
                         line_and_ex.args[1] = ex
                         continue
                     end
+                    push!(starts, loc.line - first_line)
+                    inline_display.current[] = length(starts)
                     # Wrap things to be eval'd in a :toplevel expr to carry line
                     # information as part of the expr.
                     line_and_ex.args[2] = ex
@@ -122,11 +127,12 @@ function include_str(
             end
             return result
         end
+        return merge(captured, (; expression_starts = starts))
     catch err
         if err isa Base.Meta.ParseError
             return (;
                 result = err,
-                streams = Tuple{String,String,Int}[],
+                streams = Tuple{String,String,Int,Int,String}[],
                 error = true,
                 backtrace = catch_backtrace(),
             )

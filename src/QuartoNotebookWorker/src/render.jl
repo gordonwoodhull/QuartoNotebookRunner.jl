@@ -6,6 +6,7 @@ function render(
     line::Integer,
     cell_options::AbstractDict = Dict{String,Any}();
     inline::Bool = false,
+    trace::Bool = false,
     mod::Module,
 )
     # This records whether the outermost cell is an expandable cell, which we
@@ -23,6 +24,7 @@ function render(
                 cell_options,
                 is_expansion_ref;
                 inline,
+                trace,
             ) do inline_display
                 Base.@invokelatest include_str(
                     mod,
@@ -49,9 +51,10 @@ function _render_thunk(
     cell_options::AbstractDict = Dict{String,Any}(),
     is_expansion_ref::Ref{Bool} = Ref(false);
     inline::Bool,
+    trace::Bool = false,
 )
-    captured, display_results = NotebookState.with_cell_options(cell_options) do
-        with_inline_display(thunk, cell_options)
+    captured, display_results, display_expressions = NotebookState.with_cell_options(cell_options) do
+        with_inline_display(thunk, cell_options; trace)
     end
 
     # Attempt to expand the cell. This requires the cell result to have a method
@@ -75,6 +78,8 @@ function _render_thunk(
                     captured.streams,
                     string(typeof(error)),
                     collect(eachline(IOBuffer(clean_bt_str(true, backtrace, error, mod)))),
+                    get(captured, :expression_starts, Int[]),
+                    display_expressions,
                 ),
             )
         end
@@ -104,6 +109,7 @@ function _render_thunk(
                 mod,
                 cell.options;
                 inline,
+                trace,
             )
         end
     else
@@ -135,6 +141,8 @@ function _render_thunk(
                         ),
                     ),
                 ),
+                get(captured, :expression_starts, Int[]),
+                display_expressions,
             ),
         )
     end

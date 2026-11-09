@@ -15,7 +15,7 @@ Base.lock(f, lio::LockableIO) =
 
 const MsgID = UInt64
 const MAGIC = UInt32(0x514E5257)  # "QNRW"
-const PROTOCOL_VERSION = UInt8(8)  # Place cell streams relative to display results
+const PROTOCOL_VERSION = UInt8(9)  # Attribute outputs to expressions and log kinds (RenderRequest.trace)
 
 module MsgType
 const CALL = 0x01       # expects response
@@ -117,10 +117,16 @@ struct CellResult
     cell_options::Dict{String,Any}
     results::Dict{String,MimeResult}
     display_results::Vector{Dict{String,MimeResult}}
-    # Stream name, text, and how many of `display_results` came before it.
-    streams::Vector{Tuple{String,String,Int}}
+    # Stream name, text, how many of `display_results` came before it, the 1-based
+    # top-level expression that wrote it, and the log kind ("message", "warning",
+    # "error", or ""). The last two are 0 and "" unless the request asked to trace.
+    streams::Vector{Tuple{String,String,Int,Int,String}}
     error::Union{Nothing,String}
     backtrace::Vector{String}
+    # Line (0-based, from the first line of code) where each top-level expression starts.
+    expression_starts::Vector{Int}
+    # The expression each of `display_results` came from.
+    display_expressions::Vector{Int}
 end
 
 struct RenderResponse
@@ -153,6 +159,8 @@ Base.@kwdef struct RenderRequest <: IPCRequest
     line::Int64
     cell_options::Dict{String,Any}
     inline::Bool = false
+    # `emitUnits`: attribute each output to its expression and log kind.
+    trace::Bool = false
 end
 
 Base.@kwdef struct EvaluateParamsRequest <: IPCRequest
@@ -272,6 +280,8 @@ function _serialize(io::IO, x::CellResult)
     _serialize(io, x.streams)
     _serialize(io, x.error)
     _serialize(io, x.backtrace)
+    _serialize(io, x.expression_starts)
+    _serialize(io, x.display_expressions)
 end
 
 function _serialize(io::IO, x::RenderResponse)
@@ -307,6 +317,7 @@ function _serialize(io::IO, x::RenderRequest)
     _serialize(io, x.line)
     _serialize(io, x.cell_options)
     _serialize(io, x.inline)
+    _serialize(io, x.trace)
 end
 
 function _serialize(io::IO, x::EvaluateParamsRequest)
@@ -369,6 +380,8 @@ function _deserialize(io::IO)
             _deserialize(io),
             _deserialize(io),
             _deserialize(io),
+            _deserialize(io),
+            _deserialize(io),
         )
     elseif tag == TAG_RENDERRESPONSE
         RenderResponse(_deserialize(io), _deserialize(io))
@@ -394,6 +407,7 @@ function _deserialize(io::IO)
         NotebookCloseRequest(_deserialize(io))
     elseif tag == TAG_RENDER_REQ
         RenderRequest(
+            _deserialize(io),
             _deserialize(io),
             _deserialize(io),
             _deserialize(io),

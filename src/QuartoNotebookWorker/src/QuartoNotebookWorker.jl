@@ -207,6 +207,7 @@ function dispatch(req::WorkerIPC.RenderRequest, contexts::Contexts, lock::Reentr
                         req.line,
                         req.cell_options;
                         inline = req.inline,
+                        trace = req.trace,
                         mod = ctx.mod,
                     )
                 end

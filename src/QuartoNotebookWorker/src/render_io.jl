@@ -6,7 +6,9 @@ function io_capture(f; cell_options, inline_display::InlineDisplay, kws...)
     mark = length(LOADED_EXTENSIONS)
     captured = _capture(f, inline_display; kws...)
     extensions = @view LOADED_EXTENSIONS[mark+1:end]
-    warning = get(cell_options, "warning", true)
+    # With `trace` the presenter, not capture, hides warnings (it can tell them
+    # apart by kind), so stderr is kept.
+    warning = get(cell_options, "warning", true) || inline_display.trace
     return merge(
         captured,
         (; streams = _tidy_streams(captured.streams, extensions, warning)),
@@ -17,16 +19,18 @@ end
 # leave the `stdout` runs either side of each one as separate blocks, so the
 # worker drops those streams itself and joins the runs that remain.
 function _tidy_streams(streams, extensions, warning::Bool)
-    tidied = Tuple{String,String,Int}[]
-    for (name, text, displays) in streams
+    tidied = Tuple{String,String,Int,Int,String}[]
+    for (name, text, displays, expression, kind) in streams
         warning || name == "stdout" || continue
         text = strip_worker_precompilation(text, extensions)
         isempty(text) && continue
         previous = isempty(tidied) ? nothing : tidied[end]
-        if previous !== nothing && previous[1] == name && previous[3] == displays
-            tidied[end] = (name, previous[2] * text, displays)
+        if previous !== nothing &&
+           (previous[1], previous[3], previous[4], previous[5]) ==
+           (name, displays, expression, kind)
+            tidied[end] = (name, previous[2] * text, displays, expression, kind)
         else
-            push!(tidied, (name, text, displays))
+            push!(tidied, (name, text, displays, expression, kind))
         end
     end
     return tidied
@@ -37,23 +41,30 @@ end
 # before it, so a display between two writes to one stream splits the run. The
 # display's lock guards the runs too, so the count and the queue agree.
 struct StreamRuns
-    runs::Vector{Tuple{String,Int,IOBuffer}}
+    runs::Vector{Tuple{String,Int,Int,String,IOBuffer}}
     inline_display::InlineDisplay
 end
-StreamRuns(inline_display) = StreamRuns(Tuple{String,Int,IOBuffer}[], inline_display)
+StreamRuns(inline_display) =
+    StreamRuns(Tuple{String,Int,Int,String,IOBuffer}[], inline_display)
 
 function _record!(write_bytes, runs::StreamRuns, name::String)
     lock(runs.inline_display.lock) do
-        run = (name, length(runs.inline_display.queue))
-        if isempty(runs.runs) || runs.runs[end][1:2] != run
+        # Only a trace splits runs by expression and kind; stdout never has a kind.
+        trace = runs.inline_display.trace
+        expression = trace ? runs.inline_display.current[] : 0
+        kind = trace && name == "stderr" ? runs.inline_display.kind[] : ""
+        run = (name, length(runs.inline_display.queue), expression, kind)
+        if isempty(runs.runs) || runs.runs[end][1:4] != run
             push!(runs.runs, (run..., IOBuffer()))
         end
-        write_bytes(runs.runs[end][3])
+        write_bytes(runs.runs[end][5])
     end
 end
 
-_streams(runs::StreamRuns) =
-    [(name, String(take!(buffer)), displays) for (name, displays, buffer) in runs.runs]
+_streams(runs::StreamRuns) = [
+    (name, String(take!(buffer)), displays, expression, kind) for
+    (name, displays, expression, kind, buffer) in runs.runs
+]
 
 # One of the streams a cell writes to. A write from Julia is recorded as it
 # happens, which is what keeps the order across streams. The file descriptor
@@ -108,6 +119,32 @@ end
     Base.redirect_stderr(stream::CapturedStream) = redirect_stderr(Base.pipe_writer(stream))
 end
 
+# Tags each log record's stderr write with its level, so a message can be
+# told from a warning. `ConsoleLogger` writes a record with one write to its stream,
+# inside `handle_message`, so a Ref set around the call attributes it exactly.
+struct KindLogger <: Logging.AbstractLogger
+    inner::Logging.ConsoleLogger
+    inline_display::InlineDisplay
+end
+Logging.min_enabled_level(l::KindLogger) = Logging.min_enabled_level(l.inner)
+Logging.shouldlog(l::KindLogger, args...) = Logging.shouldlog(l.inner, args...)
+Logging.catch_exceptions(l::KindLogger) = Logging.catch_exceptions(l.inner)
+function Logging.handle_message(l::KindLogger, level, args...; kws...)
+    kind =
+        level >= Logging.Error ? "error" :
+        level >= Logging.Warn ? "warning" : "message"
+    lock(l.inline_display.lock) do
+        l.inline_display.kind[] = kind
+    end
+    try
+        Logging.handle_message(l.inner, level, args...; kws...)
+    finally
+        lock(l.inline_display.lock) do
+            l.inline_display.kind[] = ""
+        end
+    end
+end
+
 # Capture what the cell writes to `stdout`, `stderr` and the logger. The readers
 # stop once the cell's code has returned rather than once the pipes reach their
 # end: a process the cell started and left running holds a copy of the write
@@ -132,7 +169,8 @@ function _capture(
     context_stderr = IOContext(captured_stderr, :color => colored, io_context...)
     redirect_stdout(context_stdout)
     redirect_stderr(context_stderr)
-    logger = Logging.ConsoleLogger(context_stderr)
+    console_logger = Logging.ConsoleLogger(context_stderr)
+    logger = inline_display.trace ? KindLogger(console_logger, inline_display) : console_logger
 
     # A new task seeds its rng from the current task, which moves the stream the
     # cell's own code draws from, so put the seed back afterwards.

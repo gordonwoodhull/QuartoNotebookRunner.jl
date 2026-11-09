@@ -12,9 +12,9 @@
         """
         response = QNW.render(code, "test.jl", 1; mod)
         @test response.cells[1].streams == [
-            ("stdout", "one\n", 0),
-            ("stderr", "two\n", 0),
-            ("stdout", "three\nfour\n", 0),
+            ("stdout", "one\n", 0, 0, ""),
+            ("stderr", "two\n", 0, 0, ""),
+            ("stdout", "three\nfour\n", 0, 0, ""),
         ]
     end
 end
@@ -45,7 +45,7 @@ end
         nothing
         """
         response = QNW.render(code, "test.jl", 1; mod)
-        streams = Dict(name => text for (name, text, _) in response.cells[1].streams)
+        streams = Dict(name => text for (name, text, _, _, _) in response.cells[1].streams)
         @test streams["stdout"] == "out\n"
         @test streams["stderr"] == "err\n"
     end
@@ -66,7 +66,7 @@ end
         """
         options = Dict{String,Any}("warning" => false)
         response = QNW.render(code, "test.jl", 1, options; mod)
-        @test response.cells[1].streams == [("stdout", "one\ntwo\n", 0)]
+        @test response.cells[1].streams == [("stdout", "one\ntwo\n", 0, 0, "")]
     end
 end
 
@@ -131,10 +131,10 @@ end
         """
         response = QNW.render(code, "test.jl", 1; mod)
         @test response.cells[1].streams == [
-            ("stdout", "before\n", 0),
-            ("stdout", "between\n", 1),
-            ("stderr", "still between\n", 1),
-            ("stdout", "after\n", 3),
+            ("stdout", "before\n", 0, 0, ""),
+            ("stdout", "between\n", 1, 0, ""),
+            ("stderr", "still between\n", 1, 0, ""),
+            ("stdout", "after\n", 3, 0, ""),
         ]
         @test length(response.cells[1].display_results) == 3
     end
@@ -156,7 +156,7 @@ end
         options = Dict{String,Any}("warning" => false)
         response = QNW.render(code, "test.jl", 1, options; mod)
         @test response.cells[1].streams ==
-              [("stdout", "one\ntwo\n", 0), ("stdout", "three\n", 1)]
+              [("stdout", "one\ntwo\n", 0, 0, ""), ("stdout", "three\n", 1, 0, "")]
     end
 end
 
@@ -168,5 +168,57 @@ end
 
         response = QNW.render("1 + 1", "test.jl", 1; mod)
         @test isempty(response.cells[1].streams)
+    end
+end
+
+@testitem "trace splits streams by expression and log kind" begin
+    import QuartoNotebookWorker as QNW
+
+    QNW.NotebookState.with_test_context() do
+        mod = QNW.NotebookState.notebook_module()
+
+        code = """
+        println("one")
+        @warn "careful"
+        @info "fyi"
+        println(stderr, "raw")
+        print("two")
+        display("shown")
+        println("three")
+        """
+        response = QNW.render(code, "test.jl", 1, Dict{String,Any}(); trace = true, mod)
+        cell = response.cells[1]
+        @test [(n, e, k) for (n, _, _, e, k) in cell.streams] == [
+            ("stdout", 1, ""),
+            ("stderr", 2, "warning"),
+            ("stderr", 3, "message"),
+            ("stderr", 4, ""),
+            ("stdout", 5, ""),
+            ("stdout", 7, ""),
+        ]
+        @test cell.expression_starts == collect(0:6)
+        @test cell.display_expressions == [6]
+        # Without a trace, the same cell gives the old three runs.
+        plain = QNW.render(code, "test.jl", 1, Dict{String,Any}(); mod)
+        @test [(n, e, k) for (n, _, _, e, k) in plain.cells[1].streams] ==
+              [("stdout", 0, ""), ("stderr", 0, ""), ("stdout", 0, ""), ("stdout", 0, "")]
+    end
+end
+
+@testitem "trace keeps stderr under warning false" begin
+    import QuartoNotebookWorker as QNW
+
+    QNW.NotebookState.with_test_context() do
+        mod = QNW.NotebookState.notebook_module()
+
+        code = """
+        @warn "hidden by the presenter"
+        println(stderr, "raw")
+        """
+        options = Dict{String,Any}("warning" => false)
+        traced = QNW.render(code, "test.jl", 1, options; trace = true, mod)
+        @test [k for (_, _, _, _, k) in traced.cells[1].streams] == ["warning", ""]
+        untraced = QNW.render(code, "test.jl", 1, options; mod)
+        @test isempty(untraced.cells[1].streams)
     end
 end

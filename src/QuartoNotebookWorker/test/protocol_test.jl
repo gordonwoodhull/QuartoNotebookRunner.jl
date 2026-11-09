@@ -54,6 +54,7 @@ end
         line = 42,
         cell_options = Dict{String,Any}("echo" => false),
         inline = true,
+        trace = true,
     )
     bytes = IPC._ipc_serialize(req)
     result = IPC._ipc_deserialize(bytes)
@@ -64,6 +65,15 @@ end
     @test result.notebook == req.notebook
     @test result.line == req.line
     @test result.cell_options == req.cell_options
+    @test result.inline == true
+    @test result.trace == true
+    @test IPC._ipc_deserialize(IPC._ipc_serialize(IPC.RenderRequest(
+        code = "1",
+        file = "f",
+        notebook = "n",
+        line = 1,
+        cell_options = Dict{String,Any}(),
+    ))).trace == false
     @test result.inline == req.inline
 end
 
@@ -99,9 +109,11 @@ end
                     IPC.MimeResult("text/html", false, UInt8[0x3c, 0x70, 0x3e]),
             ),
         ],
-        [("stdout", "out\n", 0), ("stderr", "err\n", 1)],
+        [("stdout", "out\n", 0, 1, ""), ("stderr", "err\n", 1, 2, "warning")],
         nothing,
         String[],
+        [0, 3],
+        [2],
     )
     resp = IPC.RenderResponse([cell], false)
     bytes = IPC._ipc_serialize(resp)
@@ -111,7 +123,10 @@ end
     @test length(result.cells) == 1
     @test result.is_expansion == false
     @test result.cells[1].code == "code"
-    @test result.cells[1].streams == [("stdout", "out\n", 0), ("stderr", "err\n", 1)]
+    @test result.cells[1].streams ==
+          [("stdout", "out\n", 0, 1, ""), ("stderr", "err\n", 1, 2, "warning")]
+    @test result.cells[1].expression_starts == [0, 3]
+    @test result.cells[1].display_expressions == [2]
     @test result.cells[1].error === nothing
     @test haskey(result.cells[1].results, "text/plain")
     @test result.cells[1].results["text/plain"].data == UInt8[0x32]

@@ -64,7 +64,7 @@ end
             z = 3
             w = 4
             v = 5
-            display("image/svg+xml", "<svg xmlns='http://www.w3.org/2000/svg'/>")
+            display(HTML("<b>a figure stand-in</b>"))
             @info "fyi"
             println(stderr, "raw stderr")
             print("tail ")
@@ -137,13 +137,14 @@ end
         QNR.close!(server, qmd)
         cell = only(filter(c -> string(c.cell_type) == "code", json.cells))
         q = cell.metadata.quarto
-        # Code after the options is: blank, comment, function (lines 2-4),
-        # println (5), for (6-8), x = [...] (9-10), f(2) (11).
-        @test collect(q.expression_starts) == [2, 5, 6, 9, 11]
+        # Lines count from the first line of code after the `#|` options and
+        # blank lines: comment (0), function (1-3), println (4), for (5-7),
+        # x = [...] (8-9), f(2) (10).
+        @test collect(q.expression_starts) == [1, 4, 5, 8, 10]
         # The loop's two prints belong to expression 3 and anchor at the next start.
         i = findfirst(==(3), collect(q.output_expressions))
         @test i !== nothing
-        @test q.output_anchors[i] == 9
+        @test q.output_anchors[i] == 8
     end
 end
 
@@ -223,11 +224,13 @@ end
         QNR.close!(server, qmd)
         cell = only(filter(c -> string(c.cell_type) == "code", json.cells))
         q = cell.metadata.quarto
-        @test collect(q.expression_starts) == [0, 1, 2]
+        # Starts are recorded for the expressions that ran, so the never-run
+        # third one is absent.
+        @test collect(q.expression_starts) == [0, 1]
         err = findfirst(o -> o.output_type == "error", cell.outputs)
         @test err !== nothing
-        # The throwing expression is 2; its anchor is the line count (3), not
-        # a start of the never-run expression 3 (line 2).
+        # The throwing expression is 2; its anchor is the line count (3), the end
+        # of the code, not the start of the never-run expression 3 (line 2).
         @test q.output_expressions[err] == 2
         @test q.output_anchors[err] == 3
     end

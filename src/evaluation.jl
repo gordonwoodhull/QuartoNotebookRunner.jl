@@ -381,6 +381,7 @@ function _evaluate_code_cell!(
             notebook = f.path,
             line = chunk.line + 1,
             cell_options = chunk.cell_options,
+            trace = quarto !== nothing,
         ),
     )
     worker_results = render_response.cells
@@ -405,7 +406,9 @@ function _evaluate_code_cell!(
 
     for (mth, remote) in enumerate(worker_results)
         allow_error_cell = get(remote.cell_options, "error", allow_error_global)
-        outputs = _format_worker_outputs(remote, allow_error_cell, record_error!, chunk)
+        outputs, out_expressions, out_kinds =
+            _format_worker_outputs(remote, allow_error_cell, record_error!, chunk)
+        trace = quarto === nothing ? nothing : _trace_metadata(remote, chunk, out_expressions, out_kinds)
 
         cell_options = expand_cell ? remote.cell_options : Dict()
 
@@ -435,8 +438,8 @@ function _evaluate_code_cell!(
             (;
                 id = expand_cell ? string(nth, "_", mth) : string(nth),
                 cell_type = chunk.type,
-                metadata = expand_cell ? _cell_metadata(quarto; expansion = mth) :
-                           _cell_metadata(quarto),
+                metadata = expand_cell ? _cell_metadata(quarto; expansion = mth, (trace === nothing ? (;) : trace)...) :
+                           _cell_metadata(quarto; (trace === nothing ? (;) : trace)...),
                 source = process_cell_source(source, cell_options),
                 outputs,
                 execution_count = 1,
@@ -453,21 +456,34 @@ execute results, evaluation errors, output streams, and show errors.
 """
 function _format_worker_outputs(remote, allow_error_cell, record_error!, chunk)
     outputs = []
+    # Which expression and which log kind produced each output.
+    out_expressions = Int[]
+    out_kinds = Union{Nothing,String}[]
+    nexpr = length(remote.expression_starts)
+    tag!(expression, kind = nothing) =
+        while length(out_expressions) < length(outputs)
+            push!(out_expressions, expression)
+            push!(out_kinds, kind)
+        end
     processed = process_results(remote.results)
 
     # Streams and displays go out in the order the cell wrote them. A cell that
     # throws keeps its streams but not its displays.
     displays = isnothing(remote.error) ? remote.display_results : []
     shown = 0
-    for (name, text, displays_before) in remote.streams
+    for (name, text, displays_before, expression, kind) in remote.streams
         while shown < min(displays_before, length(displays))
             shown += 1
             _push_display!(outputs, displays[shown], allow_error_cell, record_error!, chunk)
+            tag!(remote.display_expressions[shown])
         end
         push!(outputs, (; output_type = "stream", name, text))
+        tag!(expression, isempty(kind) ? nothing : kind)
     end
     for display_result in displays[shown+1:end]
         _push_display!(outputs, display_result, allow_error_cell, record_error!, chunk)
+        shown += 1
+        tag!(remote.display_expressions[shown])
     end
 
     if isnothing(remote.error)
@@ -505,8 +521,30 @@ function _format_worker_outputs(remote, allow_error_cell, record_error!, chunk)
     # Errors from the `show` output of values, not from cell evaluation.
     # If something throws here the user's `show` method has a bug.
     _push_show_errors!(outputs, processed.errors, allow_error_cell, record_error!, chunk)
+    tag!(nexpr)
 
-    return outputs
+    return outputs, out_expressions, out_kinds
+end
+
+# Lines of code after the leading `#|` options and blank lines, as the worker counts them.
+function _code_line_count(source::AbstractString)
+    lines = collect(eachline(IOBuffer(source)))
+    dropped = something(findfirst(l -> !(startswith(l, "#|") || isempty(strip(l))), lines), length(lines) + 1) - 1
+    return length(lines) - dropped
+end
+
+# `output_anchors`: the source lines that precede each output, i.e. up to the start of the
+# next expression (or the end of the code, for the last).
+function _trace_metadata(remote, chunk, out_expressions, out_kinds)
+    starts = remote.expression_starts
+    total = _code_line_count(chunk.source)
+    anchor(e) = e == 0 ? 0 : e < length(starts) ? starts[e+1] : total
+    return (;
+        expression_starts = starts,
+        output_expressions = out_expressions,
+        output_anchors = [anchor(e) for e in out_expressions],
+        output_kinds = out_kinds,
+    )
 end
 
 function _push_display!(outputs, display_result, allow_error_cell, record_error!, chunk)
